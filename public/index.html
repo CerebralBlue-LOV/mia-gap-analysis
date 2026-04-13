@@ -661,6 +661,63 @@ function hideError() {
   document.getElementById("errorBanner").classList.remove("active");
 }
 
+function mergeGapData(rawStdVar, gapCodesVar, state, subject, gradeBand) {
+  // Parse raw_standards: [{c, d, g, m, u}, ...]
+  let rawStds;
+  try { rawStds = JSON.parse(rawStdVar); } catch {
+    const m = rawStdVar.match(/\[[\s\S]*\]/);
+    rawStds = m ? JSON.parse(m[0]) : [];
+  }
+
+  // Parse gap_codes: [["CODE","S","evidence","Topics"], ...]
+  let gapCodes;
+  try { gapCodes = JSON.parse(gapCodesVar); } catch {
+    const m = gapCodesVar.match(/\[[\s\S]*\]/);
+    gapCodes = m ? JSON.parse(m[0]) : [];
+  }
+
+  // Build lookup: code -> gap info
+  const gapMap = {};
+  gapCodes.forEach(entry => {
+    if (Array.isArray(entry) && entry.length >= 2) {
+      const statusMap = { C: "COVERED", P: "PARTIAL", G: "GAP" };
+      gapMap[entry[0]] = {
+        status: statusMap[entry[1]] || "GAP",
+        evidence: entry[2] || "",
+        topics: entry[3] ? entry[3].split(",").map(t => t.trim()).filter(Boolean) : []
+      };
+    }
+  });
+
+  // Merge into full format
+  const standards = rawStds.map(s => {
+    const gap = gapMap[s.c] || { status: "GAP", evidence: "Not analyzed", topics: [] };
+    return {
+      code: s.c || "",
+      description: s.d || "",
+      grade: s.g || "",
+      domain: s.m || "",
+      status: gap.status,
+      evidence: gap.evidence,
+      matching_topics: gap.topics,
+      provenance_url: s.u || "",
+      confidence: gap.status === "COVERED" ? "HIGH" : gap.status === "PARTIAL" ? "MEDIUM" : "LOW",
+      priority: gap.status === "GAP" ? "CRITICAL" : gap.status === "PARTIAL" ? "HIGH" : "MEDIUM"
+    };
+  });
+
+  const covered = standards.filter(s => s.status === "COVERED").length;
+  const partial = standards.filter(s => s.status === "PARTIAL").length;
+  const gaps = standards.filter(s => s.status === "GAP").length;
+  const total = standards.length;
+  const pct = total > 0 ? Math.round((covered + partial * 0.5) / total * 100) : 0;
+
+  return {
+    metadata: { state, subject, grade_band: gradeBand, total_standards: total, covered, partial, gaps, coverage_pct: pct },
+    standards
+  };
+}
+
 async function runAnalysis() {
   const state = document.getElementById("selectState").value;
   const subject = document.getElementById("selectSubject").value;
@@ -708,17 +765,26 @@ async function runAnalysis() {
     const data = await resp.json();
     setProgress(100, "Complete!", "Rendering results...");
 
-    // Parse gap analysis
-    const gapRaw = data.variables?.gap_analysis || data.answer || "";
+    // Parse gap analysis — supports two formats:
+    // Format A (v16+): separate raw_standards + gap_codes variables (compact, no truncation)
+    // Format B (legacy): single gap_analysis variable with full JSON
     let gapData;
-    try {
-      // Try direct parse
-      gapData = JSON.parse(gapRaw);
-    } catch {
-      // Try extracting JSON from text
-      const match = gapRaw.match(/\{[\s\S]*\}/);
-      if (match) gapData = JSON.parse(match[0]);
-      else throw new Error("Could not parse gap analysis results.");
+    const rawStdVar = data.variables?.raw_standards || "";
+    const gapCodesVar = data.variables?.gap_codes || "";
+
+    if (rawStdVar && gapCodesVar) {
+      // Format A: merge raw_standards + gap_codes client-side
+      gapData = mergeGapData(rawStdVar, gapCodesVar, state, subject, grade);
+    } else {
+      // Format B: legacy single-variable format
+      const gapRaw = data.variables?.gap_analysis || data.answer || "";
+      try {
+        gapData = JSON.parse(gapRaw);
+      } catch {
+        const match = gapRaw.match(/\{[\s\S]*\}/);
+        if (match) gapData = JSON.parse(match[0]);
+        else throw new Error("Could not parse gap analysis results.");
+      }
     }
 
     setTimeout(() => {
