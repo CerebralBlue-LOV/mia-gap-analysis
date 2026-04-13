@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: mia-gap-analysis
+    runtime: docker
+    rootDir: .
+    dockerfilePath: ./Dockerfile
+    plan: free
+    envVars:
+      - key: NEURALSEEK_API_KEY
+        sync: false
+      - key: NEURALSEEK_PUBLIC_API_URL
+        sync: false
+      - key: BASIC_AUTH_USER
+        sync: false
+      - key: BASIC_AUTH_PASS
+        sync: false
+      - key: HOST
+        value: 0.0.0.0
